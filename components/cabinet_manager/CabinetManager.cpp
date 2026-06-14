@@ -17,6 +17,8 @@ void CabinetManager::setReportHandler(std::function<void(const CabinetReport &)>
 
 esp_err_t CabinetManager::initializeHardware()
 {
+    uint8_t managementCount = 0;
+    uint8_t shelfCount = 0;
     ESP_LOGI(TAG, "Starting cabinet initialization sequence");
     state_ = CabinetState::DISCOVERING_UNITS;
 
@@ -40,7 +42,28 @@ esp_err_t CabinetManager::initializeHardware()
         esp_err_t err = sendAndRead(item.frame, &response, item.expectResponse);
 
         const bool ok = (err == ESP_OK);
+        if (item.expectResponse && ok)
+        {
+            ProtocolMessage message;
 
+            if (protocol_.parseFrame(response, message))
+            {
+                if (message.command == 'e' && message.subCommand == '^')
+                {
+                    if (message.shelfUnit == 0xF0)
+                    {
+                        managementCount = message.managementUnit + 1;
+                        ESP_LOGI(TAG, "Detected management units: %u", managementCount);
+                    }
+                    else
+                    {
+                        shelfCount = message.shelfUnit + 1;
+                        ESP_LOGI(TAG, "Detected shelf units for M00: %u", shelfCount);
+                    }
+                }
+            }
+        }
+        
         report(CabinetReport{
             CabinetReportType::UART_RESPONSE,
             "",
@@ -198,6 +221,23 @@ esp_err_t CabinetManager::sendAndRead(const std::string &frame,
     if (err == ESP_OK)
     {
         ESP_LOGI(TAG, "RX: %s", target.c_str());
+
+        ProtocolMessage message;
+
+        if (protocol_.parseFrame(target, message))
+        {
+            ESP_LOGI(TAG,
+                     "PARSED: M=%02X SU=%02X CMD=%c SUB=%c DATA=%u",
+                     message.managementUnit,
+                     message.shelfUnit,
+                     message.command,
+                     message.subCommand,
+                     static_cast<unsigned>(message.data.size()));
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Failed to parse response: %s", target.c_str());
+        }
     }
     else
     {
