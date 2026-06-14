@@ -28,4 +28,7 @@ private:
     UartManager &uart_;
     std::function<void(const CabinetReport &)> reportHandler_;
     CabinetState state_ = CabinetState::BOOT;
+
+    uint8_t managementCount_ = 0;
+    uint8_t shelfCount_ = 0;
 };

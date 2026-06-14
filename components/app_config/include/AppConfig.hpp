@@ -43,6 +43,7 @@ struct UartConfig
 
 struct CabinetConfig
 {
+    const char *stationId = "03";
     int defaultPulseMs = 500;
 };
 

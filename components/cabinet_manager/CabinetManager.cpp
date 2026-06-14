@@ -17,8 +17,7 @@ void CabinetManager::setReportHandler(std::function<void(const CabinetReport &)>
 
 esp_err_t CabinetManager::initializeHardware()
 {
-    uint8_t managementCount = 0;
-    uint8_t shelfCount = 0;
+
     ESP_LOGI(TAG, "Starting cabinet initialization sequence");
     state_ = CabinetState::DISCOVERING_UNITS;
 
@@ -52,18 +51,18 @@ esp_err_t CabinetManager::initializeHardware()
                 {
                     if (message.shelfUnit == 0xF0)
                     {
-                        managementCount = message.managementUnit + 1;
-                        ESP_LOGI(TAG, "Detected management units: %u", managementCount);
+                        managementCount_ = message.managementUnit + 1;
+                        ESP_LOGI(TAG, "Detected management units: %u", managementCount_);
                     }
                     else
                     {
-                        shelfCount = message.shelfUnit + 1;
-                        ESP_LOGI(TAG, "Detected shelf units for M00: %u", shelfCount);
+                        shelfCount_ = message.shelfUnit + 1;
+                        ESP_LOGI(TAG, "Detected shelf units for M00: %u", shelfCount_);
                     }
                 }
             }
         }
-        
+
         report(CabinetReport{
             CabinetReportType::UART_RESPONSE,
             "",
@@ -172,27 +171,55 @@ void CabinetManager::handleDoorCommand(const DoorCommand &command)
 
 DoorAddress CabinetManager::resolveDoorAddress(const std::string &doorId) const
 {
-    if (doorId == "03-01")
+    const std::string prefix = std::string(config_.stationId) + "-";
+    if (doorId.rfind(prefix, 0) != 0)
     {
-        return DoorAddress{0x00, 0x00, 0x01};
+        return DoorAddress{0xFF, 0xFF, 0xFF};
     }
 
-    if (doorId == "03-02")
+    std::string doorNumberText = doorId.substr(prefix.size());
+
+    if (doorNumberText.empty())
     {
-        return DoorAddress{0x00, 0x00, 0x02};
+        return DoorAddress{0xFF, 0xFF, 0xFF};
     }
 
-    if (doorId == "03-03")
+    int doorNumber = 0;
+
+    for (char c : doorNumberText)
     {
-        return DoorAddress{0x00, 0x01, 0x01};
+        if (c < '0' || c > '9')
+        {
+            return DoorAddress{0xFF, 0xFF, 0xFF};
+        }
+
+        doorNumber = doorNumber * 10 + (c - '0');
     }
 
-    if (doorId == "03-04")
+    if (doorNumber <= 0)
     {
-        return DoorAddress{0x00, 0x01, 0x02};
+        return DoorAddress{0xFF, 0xFF, 0xFF};
     }
 
-    return DoorAddress{0xFF, 0xFF, 0xFF};
+    const int maxDoorCount = static_cast<int>(shelfCount_) * 2;
+
+    if (doorNumber > maxDoorCount)
+    {
+        ESP_LOGW(TAG,
+                 "doorId %s out of range. shelfCount=%u maxDoorCount=%d",
+                 doorId.c_str(),
+                 shelfCount_,
+                 maxDoorCount);
+
+        return DoorAddress{0xFF, 0xFF, 0xFF};
+    }
+
+    int zeroBasedDoor = doorNumber - 1;
+
+    uint8_t shelfUnit = static_cast<uint8_t>(zeroBasedDoor / 2);
+    uint8_t output = static_cast<uint8_t>((zeroBasedDoor % 2) + 1);
+
+    return DoorAddress{0x00, shelfUnit, output};
 }
 
 esp_err_t CabinetManager::sendAndRead(const std::string &frame,
