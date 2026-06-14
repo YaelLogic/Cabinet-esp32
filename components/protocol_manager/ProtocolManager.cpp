@@ -9,13 +9,12 @@ std::string ProtocolManager::buildDiscoverManagement() const
 
 std::string ProtocolManager::buildFixManagementAddresses() const
 {
-    return "PFFF0e_050123.";
+    return buildFrame(0xFF, 0xF0, 'e', '_', {0x01});
 }
 
 std::string ProtocolManager::buildEnableShelfPower(uint8_t managementUnit) const
 {
-    (void)managementUnit; // MVP document uses management 00.
-    return "P00F0v=050160.";
+    return buildFrame(managementUnit, 0xF0, 'v', '=', {0x01});
 }
 
 std::string ProtocolManager::buildDiscoverShelfUnits(uint8_t managementUnit) const
@@ -26,8 +25,7 @@ std::string ProtocolManager::buildDiscoverShelfUnits(uint8_t managementUnit) con
 
 std::string ProtocolManager::buildFixShelfAddresses(uint8_t managementUnit) const
 {
-    (void)managementUnit; // MVP document uses management 00.
-    return "P00FFe_050234.";
+    return buildFrame(managementUnit, 0xFF, 'e', '_', {0x02});
 }
 
 std::string ProtocolManager::buildFrame(uint8_t managementUnit,
