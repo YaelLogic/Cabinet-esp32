@@ -30,17 +30,20 @@ public:
     std::string buildLedFlash(uint8_t managementUnit, uint8_t shelfUnit, bool enabled) const;
     std::string buildInputRead(uint8_t managementUnit, uint8_t shelfUnit) const;
     std::string buildFirmwareRead(uint8_t managementUnit, uint8_t shelfUnit) const;
-    bool parseFrame(const std::string& frame, ProtocolMessage& message) const;
+    bool parseFrame(const std::string &frame, ProtocolMessage &message) const;
+
+    std::string buildErrorRead(uint8_t managementUnit, uint8_t shelfUnit) const;
+    std::string buildClearErrors(uint8_t managementUnit, uint8_t shelfUnit) const;
 
 private:
     std::string buildFrame(uint8_t managementAddress,
                            uint8_t shelfAddress,
                            char command,
                            char subCommand,
-                           const std::vector<uint8_t>& data) const;
+                           const std::vector<uint8_t> &data) const;
 
-    uint8_t calculateChecksum(const std::string& frameWithoutChecksum) const;
+    uint8_t calculateChecksum(const std::string &frameWithoutChecksum) const;
 
     static std::string hex2(uint8_t value);
-    bool parseHexByte(const std::string& text, size_t index, uint8_t& value) const;
+    bool parseHexByte(const std::string &text, size_t index, uint8_t &value) const;
 };

@@ -223,3 +223,13 @@ bool ProtocolManager::parseFrame(const std::string& frame, ProtocolMessage& mess
 
     return true;
 }
+
+std::string ProtocolManager::buildErrorRead(uint8_t managementUnit, uint8_t shelfUnit) const
+{
+    return buildFrame(managementUnit, shelfUnit, '!', '?', {});
+}
+
+std::string ProtocolManager::buildClearErrors(uint8_t managementUnit, uint8_t shelfUnit) const
+{
+    return buildFrame(managementUnit, shelfUnit, '!', '_', {});
+}

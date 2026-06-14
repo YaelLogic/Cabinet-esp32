@@ -4,7 +4,7 @@
 #include "CabinetTypes.hpp"
 #include "ProtocolManager.hpp"
 #include "UartManager.hpp"
-
+#include <vector>
 #include <functional>
 
 class CabinetManager
@@ -31,4 +31,14 @@ private:
 
     uint8_t managementCount_ = 0;
     uint8_t shelfCount_ = 0;
+
+    struct DoorEntry
+    {
+        std::string doorId;
+        DoorAddress address;
+    };
+
+    std::vector<DoorEntry> doors_;
+
+    void buildDoorMap();
 };

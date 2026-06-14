@@ -2,6 +2,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include <cstdio>
 
 static const char *TAG = "CABINET_MANAGER";
 
@@ -90,6 +91,10 @@ esp_err_t CabinetManager::initializeHardware()
         }
     }
 
+    buildDoorMap();
+    std::string errorResponse;
+    sendAndRead(protocol_.buildErrorRead(0x00, 0x01), &errorResponse, true);
+    
     state_ = CabinetState::READY;
     ESP_LOGI(TAG, "Cabinet hardware ready");
 
@@ -169,57 +174,46 @@ void CabinetManager::handleDoorCommand(const DoorCommand &command)
     state_ = CabinetState::READY;
 }
 
+void CabinetManager::buildDoorMap()
+{
+    doors_.clear();
+
+    int doorNumber = 1;
+
+    for (uint8_t shelf = 0; shelf < shelfCount_; ++shelf)
+    {
+        for (uint8_t output = 1; output <= 2; ++output)
+        {
+            char doorId[16];
+            std::snprintf(doorId, sizeof(doorId), "%s-%02d", config_.stationId, doorNumber);
+
+            doors_.push_back(DoorEntry{
+                std::string(doorId),
+                DoorAddress{0x00, shelf, output}});
+
+            ESP_LOGI(TAG,
+                     "Mapped door %s -> M=00 SU=%02X OUT=%02X",
+                     doorId,
+                     shelf,
+                     output);
+
+            ++doorNumber;
+        }
+    }
+}
+
 DoorAddress CabinetManager::resolveDoorAddress(const std::string &doorId) const
 {
-    const std::string prefix = std::string(config_.stationId) + "-";
-    if (doorId.rfind(prefix, 0) != 0)
+    for (const DoorEntry &door : doors_)
     {
-        return DoorAddress{0xFF, 0xFF, 0xFF};
-    }
-
-    std::string doorNumberText = doorId.substr(prefix.size());
-
-    if (doorNumberText.empty())
-    {
-        return DoorAddress{0xFF, 0xFF, 0xFF};
-    }
-
-    int doorNumber = 0;
-
-    for (char c : doorNumberText)
-    {
-        if (c < '0' || c > '9')
+        if (door.doorId == doorId)
         {
-            return DoorAddress{0xFF, 0xFF, 0xFF};
+            return door.address;
         }
-
-        doorNumber = doorNumber * 10 + (c - '0');
     }
 
-    if (doorNumber <= 0)
-    {
-        return DoorAddress{0xFF, 0xFF, 0xFF};
-    }
-
-    const int maxDoorCount = static_cast<int>(shelfCount_) * 2;
-
-    if (doorNumber > maxDoorCount)
-    {
-        ESP_LOGW(TAG,
-                 "doorId %s out of range. shelfCount=%u maxDoorCount=%d",
-                 doorId.c_str(),
-                 shelfCount_,
-                 maxDoorCount);
-
-        return DoorAddress{0xFF, 0xFF, 0xFF};
-    }
-
-    int zeroBasedDoor = doorNumber - 1;
-
-    uint8_t shelfUnit = static_cast<uint8_t>(zeroBasedDoor / 2);
-    uint8_t output = static_cast<uint8_t>((zeroBasedDoor % 2) + 1);
-
-    return DoorAddress{0x00, shelfUnit, output};
+    ESP_LOGW(TAG, "doorId %s not found in detected door map", doorId.c_str());
+    return DoorAddress{0xFF, 0xFF, 0xFF};
 }
 
 esp_err_t CabinetManager::sendAndRead(const std::string &frame,
