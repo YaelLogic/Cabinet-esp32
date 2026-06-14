@@ -30,21 +30,65 @@ std::string ProtocolManager::buildFixShelfAddresses(uint8_t managementUnit) cons
     return "P00FFe_050234.";
 }
 
+std::string ProtocolManager::buildFrame(uint8_t managementUnit,
+                                        uint8_t shelfUnit,
+                                        char command,
+                                        char subCommand,
+                                        const std::vector<uint8_t>& data) const
+{
+    std::string frame;
+
+    frame += 'P';
+    frame += hex2(managementUnit);
+    frame += hex2(shelfUnit);
+    frame += command;
+    frame += subCommand;
+
+    uint8_t remainingLength = static_cast<uint8_t>((data.size() * 2) + 3);
+    frame += hex2(remainingLength);
+
+    for (uint8_t byte : data)
+    {
+        frame += hex2(byte);
+    }
+
+    uint8_t checksum = calculateChecksum(frame);
+    frame += hex2(checksum);
+    frame += '.';
+
+    return frame;
+}
+
+uint8_t ProtocolManager::calculateChecksum(const std::string& frameWithoutChecksum) const
+{
+    uint32_t sum = 0;
+
+    for (char c : frameWithoutChecksum)
+    {
+        sum += static_cast<uint8_t>(c);
+    }
+
+    return static_cast<uint8_t>(255 - (sum % 256));
+}
 std::string ProtocolManager::buildOutputPulse(uint8_t managementUnit,
                                               uint8_t shelfUnit,
                                               uint8_t outputNumber,
                                               int pulseMs) const
 {
-    (void)pulseMs; // Document examples are 0.5 sec pulse.
+    uint8_t pulseTenths = static_cast<uint8_t>(pulseMs / 100);
 
-    // Known-good MVP frames from protocol document.
-    if (managementUnit == 0x00 && shelfUnit == 0x00 && outputNumber == 0x01) return "P0000o=07010516.";
-    if (managementUnit == 0x00 && shelfUnit == 0x01 && outputNumber == 0x01) return "P0001o=07010515.";
-    if (managementUnit == 0x00 && shelfUnit == 0x00 && outputNumber == 0x02) return "P0000o=07020515.";
-    if (managementUnit == 0x00 && shelfUnit == 0x01 && outputNumber == 0x02) return "P0001o=07020514.";
+    if (pulseTenths == 0)
+    {
+        pulseTenths = 1;
+    }
 
-    // TODO: Implement generic checksum builder when final checksum formula is confirmed.
-    return "";
+    return buildFrame(
+        managementUnit,
+        shelfUnit,
+        'o',
+        '=',
+        {outputNumber, pulseTenths}
+    );
 }
 
 std::string ProtocolManager::buildLedFlash(uint8_t managementUnit, uint8_t shelfUnit, bool enabled) const

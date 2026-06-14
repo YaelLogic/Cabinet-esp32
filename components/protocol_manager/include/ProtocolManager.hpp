@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
-class ProtocolManager {
+class ProtocolManager
+{
 public:
     std::string buildDiscoverManagement() const;
     std::string buildFixManagementAddresses() const;
@@ -21,5 +23,13 @@ public:
     std::string buildFirmwareRead(uint8_t managementUnit, uint8_t shelfUnit) const;
 
 private:
+    std::string buildFrame(uint8_t managementAddress,
+                           uint8_t shelfAddress,
+                           char command,
+                           char subCommand,
+                           const std::vector<uint8_t>& data) const;
+
+    uint8_t calculateChecksum(const std::string& frameWithoutChecksum) const;
+
     static std::string hex2(uint8_t value);
 };
