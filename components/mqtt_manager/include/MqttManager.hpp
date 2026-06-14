@@ -19,6 +19,8 @@ public:
     esp_err_t waitConnected(TickType_t timeoutTicks = pdMS_TO_TICKS(15000)) const;
     bool isConnected() const;
 
+    void setConnectedHandler(std::function<void()> handler);
+    
 private:
     static void eventHandler(void *handlerArgs, esp_event_base_t base, int32_t eventId, void *eventData);
     void handleEvent(esp_mqtt_event_handle_t event);
@@ -31,4 +33,6 @@ private:
     std::function<void(const DoorCommand &)> doorCommandHandler_;
     EventGroupHandle_t eventGroup_ = nullptr;
     static constexpr EventBits_t MQTT_CONNECTED_BIT = BIT0;
+
+    std::function<void()> connectedHandler_;
 };

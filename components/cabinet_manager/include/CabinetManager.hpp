@@ -18,6 +18,8 @@ public:
     esp_err_t initializeHardware();
     void handleDoorCommand(const DoorCommand &command);
 
+    void publishReadyStatus();
+    
 private:
     DoorAddress resolveDoorAddress(const std::string &doorId) const;
     esp_err_t sendAndRead(const std::string &frame, std::string *response = nullptr, bool expectResponse = true);

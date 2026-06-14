@@ -38,6 +38,11 @@ esp_err_t MqttManager::start()
     return ESP_OK;
 }
 
+void MqttManager::setConnectedHandler(std::function<void()> handler)
+{
+    connectedHandler_ = handler;
+}
+
 esp_err_t MqttManager::waitConnected(TickType_t timeoutTicks) const
 {
     if (!eventGroup_)
@@ -100,6 +105,8 @@ esp_err_t MqttManager::publishReport(const CabinetReport &report)
         cJSON_AddStringToObject(root, "uartFrame", report.uartFrame.c_str());
     if (!report.uartResponse.empty())
         cJSON_AddStringToObject(root, "uartResponse", report.uartResponse.c_str());
+    if (report.doorCount >= 0)
+        cJSON_AddNumberToObject(root, "doorCount", report.doorCount);
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -132,6 +139,10 @@ void MqttManager::handleEvent(esp_mqtt_event_handle_t event)
         ESP_LOGI(TAG, "MQTT connected, subscribing to %s", config_.commandTopic);
         esp_mqtt_client_subscribe(client_, config_.commandTopic, config_.qos);
         publishReport(CabinetReport{CabinetReportType::BOOT, "", "", true, "mqtt_connected", "", ""});
+        if (connectedHandler_)
+        {
+            connectedHandler_();
+        }
         break;
     case MQTT_EVENT_DATA:
         handleMessage(event->topic, event->topic_len, event->data, event->data_len);
@@ -162,6 +173,21 @@ void MqttManager::handleMessage(const char *topic, int topicLen, const char *dat
         publishReport(CabinetReport{CabinetReportType::ERROR, "", "", false, "invalid_json", "", ""});
         return;
     }
+
+    // cJSON *type = cJSON_GetObjectItem(root, "type");
+
+    // if (cJSON_IsString(type) && std::string(type->valuestring) == "debug_reconnect")
+    // {
+    //     ESP_LOGW(TAG, "Debug reconnect simulation requested");
+
+    //     if (connectedHandler_)
+    //     {
+    //         connectedHandler_();
+    //     }
+
+    //     cJSON_Delete(root);
+    //     return;
+    // }
 
     cJSON *doorId = cJSON_GetObjectItem(root, "doorId");
     cJSON *activityId = cJSON_GetObjectItem(root, "activityId");

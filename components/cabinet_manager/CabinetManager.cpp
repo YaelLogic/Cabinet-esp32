@@ -92,20 +92,13 @@ esp_err_t CabinetManager::initializeHardware()
     }
 
     buildDoorMap();
-    std::string errorResponse;
-    sendAndRead(protocol_.buildErrorRead(0x00, 0x01), &errorResponse, true);
-    
+    // std::string errorResponse;
+    // sendAndRead(protocol_.buildErrorRead(0x00, 0x01), &errorResponse, true);
+
     state_ = CabinetState::READY;
     ESP_LOGI(TAG, "Cabinet hardware ready");
 
-    report(CabinetReport{
-        CabinetReportType::READY,
-        "",
-        "",
-        true,
-        "cabinet_ready",
-        "",
-        ""});
+    publishReadyStatus();
 
     return ESP_OK;
 }
@@ -266,6 +259,24 @@ esp_err_t CabinetManager::sendAndRead(const std::string &frame,
     }
 
     return err;
+}
+
+void CabinetManager::publishReadyStatus()
+{
+    if (state_ != CabinetState::READY)
+    {
+        return;
+    }
+
+    report(CabinetReport{
+        CabinetReportType::READY,
+        "",
+        "",
+        true,
+        "cabinet_ready",
+        "",
+        "",
+        static_cast<int>(doors_.size())});
 }
 
 void CabinetManager::report(const CabinetReport &reportData)

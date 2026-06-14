@@ -41,6 +41,9 @@ extern "C" void app_main(void)
 
     ESP_ERROR_CHECK(cabinet.initializeHardware());
 
+    mqtt.setConnectedHandler([&cabinet]()
+                         { cabinet.publishReadyStatus(); });
+                         
     ESP_LOGI(TAG, "System ready");
 
     while (true)

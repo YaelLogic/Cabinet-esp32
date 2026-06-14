@@ -40,4 +40,5 @@ struct CabinetReport {
     std::string message;
     std::string uartFrame;
     std::string uartResponse;
+    int doorCount = -1;
 };
