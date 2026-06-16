@@ -9,7 +9,15 @@ static const char *TAG = "CABINET_MANAGER";
 CabinetManager::CabinetManager(const CabinetConfig &config,
                                ProtocolManager &protocol,
                                UartManager &uart)
-    : config_(config), protocol_(protocol), uart_(uart) {}
+    : config_(config), protocol_(protocol), uart_(uart)
+{
+    uartMutex_ = xSemaphoreCreateMutex();
+
+    for (auto &state : lastDoorStates_)
+    {
+        state = DoorState::UNKNOWN;
+    }
+}
 
 void CabinetManager::setReportHandler(std::function<void(const CabinetReport &)> handler)
 {
@@ -92,10 +100,20 @@ esp_err_t CabinetManager::initializeHardware()
     }
 
     buildDoorMap();
-    // std::string errorResponse;
-    // sendAndRead(protocol_.buildErrorRead(0x00, 0x01), &errorResponse, true);
 
     state_ = CabinetState::READY;
+
+    if (sensorTaskHandle_ == nullptr)
+    {
+        xTaskCreate(
+            &CabinetManager::sensorTaskEntry,
+            "sensor_monitor",
+            4096,
+            this,
+            5,
+            &sensorTaskHandle_);
+    }
+
     ESP_LOGI(TAG, "Cabinet hardware ready");
 
     publishReadyStatus();
@@ -137,14 +155,18 @@ void CabinetManager::handleDoorCommand(const DoorCommand &command)
         state_ = CabinetState::READY;
         return;
     }
-    std::string frame = protocol_.buildOutputPulse(address.managementUnit,
-                                                   address.shelfUnit,
-                                                   address.output,
-                                                   config_.defaultPulseMs);
-    if (frame.empty())
-    {
-        ESP_LOGE(TAG, "Failed to build protocol frame for doorId=%s", command.doorId.c_str());
+    std::string frame1 = protocol_.buildOutputPulse(address.managementUnit,
+                                                    address.shelfUnit,
+                                                    0x01,
+                                                    config_.defaultPulseMs);
 
+    std::string frame2 = protocol_.buildOutputPulse(address.managementUnit,
+                                                    address.shelfUnit,
+                                                    0x02,
+                                                    config_.defaultPulseMs);
+
+    if (frame1.empty() || frame2.empty())
+    {
         report(CabinetReport{
             CabinetReportType::ERROR,
             command.doorId,
@@ -157,41 +179,45 @@ void CabinetManager::handleDoorCommand(const DoorCommand &command)
         state_ = CabinetState::READY;
         return;
     }
-    std::string response;
-    esp_err_t err = sendAndRead(frame, &response, false);
-    bool ok = (err == ESP_OK);
 
-    report(CabinetReport{CabinetReportType::DOOR_OPEN_SENT, command.doorId, command.activityId, ok,
-                         ok ? "door_open_command_sent" : "uart_write_failed", frame, response});
+    std::string response1;
+    std::string response2;
+
+    esp_err_t err1 = sendAndRead(frame1, &response1, false);
+    esp_err_t err2 = sendAndRead(frame2, &response2, false);
+
+    bool ok = (err1 == ESP_OK && err2 == ESP_OK);
+
+    report(CabinetReport{
+        ok ? CabinetReportType::DOOR_OPEN_SENT : CabinetReportType::ERROR,
+        command.doorId,
+        command.activityId,
+        ok,
+        ok ? "door_open_command_sent" : "uart_write_failed",
+        frame1 + " " + frame2,
+        response1 + " " + response2});
 
     state_ = CabinetState::READY;
+    return;
 }
 
 void CabinetManager::buildDoorMap()
 {
     doors_.clear();
 
-    int doorNumber = 1;
-
     for (uint8_t shelf = 0; shelf < shelfCount_; ++shelf)
     {
-        for (uint8_t output = 1; output <= 2; ++output)
-        {
-            char doorId[16];
-            std::snprintf(doorId, sizeof(doorId), "%s-%02d", config_.stationId, doorNumber);
+        char doorId[16];
+        std::snprintf(doorId, sizeof(doorId), "%s-%02d", config_.stationId, shelf + 1);
 
-            doors_.push_back(DoorEntry{
-                std::string(doorId),
-                DoorAddress{0x00, shelf, output}});
+        doors_.push_back(DoorEntry{
+            std::string(doorId),
+            DoorAddress{0x00, shelf, 0x00}});
 
-            ESP_LOGI(TAG,
-                     "Mapped door %s -> M=00 SU=%02X OUT=%02X",
-                     doorId,
-                     shelf,
-                     output);
-
-            ++doorNumber;
-        }
+        ESP_LOGI(TAG,
+                 "Mapped door %s -> M=00 SU=%02X OUT01+OUT02 SENSOR00",
+                 doorId,
+                 shelf);
     }
 }
 
@@ -213,12 +239,31 @@ esp_err_t CabinetManager::sendAndRead(const std::string &frame,
                                       std::string *response,
                                       bool expectResponse)
 {
+    if (uartMutex_)
+    {
+        xSemaphoreTake(uartMutex_, portMAX_DELAY);
+    }
     ESP_LOGI(TAG, "TX: %s", frame.c_str());
-    ESP_RETURN_ON_ERROR(uart_.writeLine(frame), TAG, "UART write failed");
+    esp_err_t writeErr = uart_.writeLine(frame);
+    if (writeErr != ESP_OK)
+    {
+        ESP_LOGE(TAG, "UART write failed");
+
+        if (uartMutex_)
+        {
+            xSemaphoreGive(uartMutex_);
+        }
+
+        return writeErr;
+    }
 
     if (!expectResponse)
     {
         ESP_LOGI(TAG, "No response expected for frame: %s", frame.c_str());
+        if (uartMutex_)
+        {
+            xSemaphoreGive(uartMutex_);
+        }
         return ESP_OK;
     }
 
@@ -226,9 +271,16 @@ esp_err_t CabinetManager::sendAndRead(const std::string &frame,
     std::string &target = response ? *response : localResponse;
 
     esp_err_t err = uart_.readFrame(target);
+
     if (err == ESP_OK && target.empty())
     {
         ESP_LOGW(TAG, "Empty UART response for frame: %s", frame.c_str());
+
+        if (uartMutex_)
+        {
+            xSemaphoreGive(uartMutex_);
+        }
+
         return ESP_ERR_TIMEOUT;
     }
 
@@ -258,6 +310,10 @@ esp_err_t CabinetManager::sendAndRead(const std::string &frame,
         ESP_LOGW(TAG, "No response / timeout for frame: %s", frame.c_str());
     }
 
+    if (uartMutex_)
+    {
+        xSemaphoreGive(uartMutex_);
+    }
     return err;
 }
 
@@ -284,5 +340,133 @@ void CabinetManager::report(const CabinetReport &reportData)
     if (reportHandler_)
     {
         reportHandler_(reportData);
+    }
+}
+
+void CabinetManager::sensorTaskEntry(void *arg)
+{
+    auto *self = static_cast<CabinetManager *>(arg);
+    self->sensorMonitorLoop();
+}
+
+void CabinetManager::sensorMonitorLoop()
+{
+    ESP_LOGI(TAG, "Sensor monitor task started");
+
+    while (true)
+    {
+        if (state_ == CabinetState::READY)
+        {
+            pollShelfInputs();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+void CabinetManager::pollShelfInputs()
+{
+    for (uint8_t shelf = 0; shelf < shelfCount_; ++shelf)
+    {
+        std::string frame = protocol_.buildInputRead(0x00, shelf);
+        std::string response;
+
+        esp_err_t err = sendAndRead(frame, &response, true);
+        if (err != ESP_OK)
+        {
+            ESP_LOGW(TAG, "Input read failed for shelf %u", shelf);
+            continue;
+        }
+
+        ProtocolMessage message;
+        if (!protocol_.parseFrame(response, message))
+        {
+            ESP_LOGW(TAG, "Failed to parse input response: %s", response.c_str());
+            continue;
+        }
+
+        if (message.command != 'i' || message.subCommand != '?')
+        {
+            continue;
+        }
+
+        if (message.data.size() < 2)
+        {
+            ESP_LOGW(TAG, "Input response too short: %s", response.c_str());
+            continue;
+        }
+
+        uint8_t inputIndex = message.data[0];
+        uint8_t inputValue = message.data[1];
+
+        ESP_LOGI(TAG,
+                 "INPUT: shelf=%02X index=%02X value=%02X",
+                 shelf,
+                 inputIndex,
+                 inputValue);
+
+        handleInputValue(shelf, inputValue);
+    }
+}
+
+void CabinetManager::handleInputValue(uint8_t shelfUnit, uint8_t value)
+{
+    uint8_t doorIndex = shelfUnit;
+
+    if (doorIndex >= doors_.size())
+    {
+        return;
+    }
+
+    DoorState newState = (value == 0x01) ? DoorState::CLOSED : DoorState::OPEN;
+
+    if (lastDoorStates_[doorIndex] == newState)
+    {
+        return;
+    }
+
+    lastDoorStates_[doorIndex] = newState;
+
+    const std::string &doorId = doors_[doorIndex].doorId;
+
+    ESP_LOGI(TAG,
+             "Door state changed: %s -> %s value=%02X",
+             doorId.c_str(),
+             doorStateToString(newState),
+             value);
+
+    report(CabinetReport{
+        CabinetReportType::DOOR_STATE_CHANGED,
+        doorId,
+        "",
+        true,
+        "door_state_changed",
+        "",
+        "",
+        -1,
+        newState,
+        newState == DoorState::OPEN ? "open" :
+        newState == DoorState::CLOSED ? "close" : ""});
+}
+
+DoorState CabinetManager::decodeDoorState(uint8_t value, uint8_t bitIndex) const
+{
+    bool bitIsOne = (value & (1 << bitIndex)) != 0;
+
+    // זמני עד בדיקת חומרה:
+    // אם נראה שזה הפוך — נהפוך כאן בלבד.
+    return bitIsOne ? DoorState::CLOSED : DoorState::OPEN;
+}
+
+const char *CabinetManager::doorStateToString(DoorState state) const
+{
+    switch (state)
+    {
+    case DoorState::OPEN:
+        return "OPEN";
+    case DoorState::CLOSED:
+        return "CLOSED";
+    default:
+        return "UNKNOWN";
     }
 }

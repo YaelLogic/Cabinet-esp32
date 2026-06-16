@@ -100,9 +100,7 @@ std::string ProtocolManager::buildLedFlash(uint8_t managementUnit, uint8_t shelf
 
 std::string ProtocolManager::buildInputRead(uint8_t managementUnit, uint8_t shelfUnit) const
 {
-    if (managementUnit == 0x00 && shelfUnit == 0x00) return "P0000i?0400E8.";
-    if (managementUnit == 0x00 && shelfUnit == 0x01) return "P0001i?0400E7.";
-    return "";
+    return buildFrame(managementUnit, shelfUnit, 'i', '?', {0x00});
 }
 
 std::string ProtocolManager::buildFirmwareRead(uint8_t managementUnit, uint8_t shelfUnit) const

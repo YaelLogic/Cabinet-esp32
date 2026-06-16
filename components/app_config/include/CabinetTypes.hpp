@@ -3,19 +3,29 @@
 #include <cstdint>
 #include <string>
 
-struct DoorCommand {
-    std::string doorId;      // Backend door id
-    std::string activityId;  // Backend activity id
-    std::string time;        // ISO timestamp from backend
+struct DoorCommand
+{
+    std::string doorId;     // Backend door id
+    std::string activityId; // Backend activity id
+    std::string time;       // ISO timestamp from backend
 };
 
-struct DoorAddress {
+struct DoorAddress
+{
     uint8_t managementUnit = 0;
     uint8_t shelfUnit = 0;
     uint8_t output = 1;
 };
 
-enum class CabinetState {
+enum class DoorState
+{
+    UNKNOWN,
+    OPEN,
+    CLOSED
+};
+
+enum class CabinetState
+{
     BOOT,
     DISCOVERING_UNITS,
     READY,
@@ -23,16 +33,19 @@ enum class CabinetState {
     ERROR
 };
 
-enum class CabinetReportType {
+enum class CabinetReportType
+{
     BOOT,
     READY,
     COMMAND_RECEIVED,
     DOOR_OPEN_SENT,
+    DOOR_STATE_CHANGED,
     UART_RESPONSE,
     ERROR
 };
 
-struct CabinetReport {
+struct CabinetReport
+{
     CabinetReportType type = CabinetReportType::BOOT;
     std::string doorId;
     std::string activityId;
@@ -41,4 +54,6 @@ struct CabinetReport {
     std::string uartFrame;
     std::string uartResponse;
     int doorCount = -1;
+    DoorState doorState = DoorState::UNKNOWN;
+    std::string activity;
 };

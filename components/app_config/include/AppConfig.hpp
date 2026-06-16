@@ -19,22 +19,14 @@ struct MqttConfig
     const char *clientId = "cabinet-03";
     const char *username = "";
     const char *password = "secret-token-for-door-esp32-03:YOUR_SECRET";
-
-    // Incoming backend command topic:
-    // shita/stations/{stationId}/doors/command
-    const char *commandTopic = "shita/stations/03/doors/command";
-
-    // Outgoing ESP reports topic:
-    // shita/stations/{stationId}/doors/status
-    const char *statusTopic = "shita/stations/03/doors/response";
     int qos = 1;
 };
 
 struct UartConfig
 {
     uart_port_t port = UART_NUM_1;
-    gpio_num_t txPin = GPIO_NUM_1;
-    gpio_num_t rxPin = GPIO_NUM_2;
+    gpio_num_t txPin = GPIO_NUM_14;
+    gpio_num_t rxPin = GPIO_NUM_13;
     int baudRate = 115200;
     int rxBufferSize = 1024;
     int txBufferSize = 1024;

@@ -6,6 +6,9 @@
 #include "UartManager.hpp"
 #include <vector>
 #include <functional>
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include <array>
 
 class CabinetManager
 {
@@ -19,7 +22,7 @@ public:
     void handleDoorCommand(const DoorCommand &command);
 
     void publishReadyStatus();
-    
+
 private:
     DoorAddress resolveDoorAddress(const std::string &doorId) const;
     esp_err_t sendAndRead(const std::string &frame, std::string *response = nullptr, bool expectResponse = true);
@@ -43,4 +46,17 @@ private:
     std::vector<DoorEntry> doors_;
 
     void buildDoorMap();
+
+    static void sensorTaskEntry(void *arg);
+    void sensorMonitorLoop();
+    void pollShelfInputs();
+    void handleInputValue(uint8_t shelfUnit, uint8_t value);
+
+    DoorState decodeDoorState(uint8_t value, uint8_t bitIndex) const;
+    const char *doorStateToString(DoorState state) const;
+
+    SemaphoreHandle_t uartMutex_ = nullptr;
+    TaskHandle_t sensorTaskHandle_ = nullptr;
+
+    std::array<DoorState, 16> lastDoorStates_{};
 };

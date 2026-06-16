@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include <functional>
+#include <string>
 
 class MqttManager
 {
@@ -20,7 +21,7 @@ public:
     bool isConnected() const;
 
     void setConnectedHandler(std::function<void()> handler);
-    
+
 private:
     static void eventHandler(void *handlerArgs, esp_event_base_t base, int32_t eventId, void *eventData);
     void handleEvent(esp_mqtt_event_handle_t event);
@@ -35,4 +36,7 @@ private:
     static constexpr EventBits_t MQTT_CONNECTED_BIT = BIT0;
 
     std::function<void()> connectedHandler_;
+
+    std::string commandTopic_;
+    std::string statusTopic_;
 };

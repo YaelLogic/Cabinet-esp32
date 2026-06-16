@@ -7,7 +7,12 @@
 
 static const char *TAG = "MQTT_MANAGER";
 
-MqttManager::MqttManager(const MqttConfig &config) : config_(config) {}
+MqttManager::MqttManager(const MqttConfig &config)
+    : config_(config),
+      commandTopic_("shita/stations/" + std::string(config.stationId) + "/doors/command"),
+      statusTopic_("shita/stations/" + std::string(config.stationId) + "/doors/response")
+{
+}
 
 void MqttManager::setDoorCommandHandler(std::function<void(const DoorCommand &)> handler)
 {
@@ -73,48 +78,84 @@ esp_err_t MqttManager::publishReport(const CabinetReport &report)
         return ESP_FAIL;
     }
 
+    /*
+     * IMPORTANT:
+     * shita/stations/{stationId}/doors/response is consumed by the backend.
+     * Therefore we publish ONLY the official backend contract:
+     *
+     * {
+     *   "activityId": "...",
+     *   "activity": "open|close|error",
+     *   "doorId": "..."
+     * }
+     *
+     * All debug/status/internal reports are logged locally only.
+     */
+
+    bool shouldPublishToBackend = false;
+    std::string activity;
+
     if (report.type == CabinetReportType::DOOR_OPEN_SENT && report.success)
     {
-        cJSON *root = cJSON_CreateObject();
-        cJSON_AddStringToObject(root, "activityId", report.activityId.c_str());
-        cJSON_AddStringToObject(root, "activity", "open");
-        cJSON_AddStringToObject(root, "doorId", report.doorId.c_str());
-
-        char *json = cJSON_PrintUnformatted(root);
-        cJSON_Delete(root);
-        if (!json)
-            return ESP_ERR_NO_MEM;
-
-        int msgId = esp_mqtt_client_publish(client_, config_.statusTopic, json, 0, config_.qos, 0);
-        ESP_LOGI(TAG, "MQTT DOOR RESPONSE topic=%s msg_id=%d payload=%s", config_.statusTopic, msgId, json);
-
-        cJSON_free(json);
-        return msgId >= 0 ? ESP_OK : ESP_FAIL;
+        shouldPublishToBackend = true;
+        activity = "open";
     }
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "stationId", config_.stationId);
-    cJSON_AddStringToObject(root, "type", reportTypeToString(report.type));
-    cJSON_AddBoolToObject(root, "success", report.success);
-    cJSON_AddStringToObject(root, "message", report.message.c_str());
+    else if (report.type == CabinetReportType::DOOR_STATE_CHANGED &&
+             !report.activity.empty() &&
+             !report.activityId.empty() &&
+             !report.doorId.empty())
+    {
+        shouldPublishToBackend = true;
+        activity = report.activity;
+    }
+    else if (report.type == CabinetReportType::ERROR &&
+             !report.activityId.empty() &&
+             !report.doorId.empty())
+    {
+        shouldPublishToBackend = true;
+        activity = "error";
+    }
 
-    if (!report.doorId.empty())
-        cJSON_AddStringToObject(root, "doorId", report.doorId.c_str());
-    if (!report.activityId.empty())
-        cJSON_AddStringToObject(root, "activityId", report.activityId.c_str());
-    if (!report.uartFrame.empty())
-        cJSON_AddStringToObject(root, "uartFrame", report.uartFrame.c_str());
-    if (!report.uartResponse.empty())
-        cJSON_AddStringToObject(root, "uartResponse", report.uartResponse.c_str());
-    if (report.doorCount >= 0)
-        cJSON_AddNumberToObject(root, "doorCount", report.doorCount);
+    if (!shouldPublishToBackend)
+    {
+        ESP_LOGI(TAG,
+                 "Internal report only: type=%s success=%d doorId=%s activityId=%s message=%s",
+                 reportTypeToString(report.type),
+                 report.success,
+                 report.doorId.c_str(),
+                 report.activityId.c_str(),
+                 report.message.c_str());
+
+        return ESP_OK;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "activityId", report.activityId.c_str());
+    cJSON_AddStringToObject(root, "activity", activity.c_str());
+    cJSON_AddStringToObject(root, "doorId", report.doorId.c_str());
 
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
-    if (!json)
-        return ESP_ERR_NO_MEM;
 
-    int msgId = esp_mqtt_client_publish(client_, config_.statusTopic, json, 0, config_.qos, 0);
-    ESP_LOGI(TAG, "MQTT TX topic=%s msg_id=%d payload=%s", config_.statusTopic, msgId, json);
+    if (!json)
+    {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int msgId = esp_mqtt_client_publish(
+        client_,
+        statusTopic_.c_str(),
+        json,
+        0,
+        config_.qos,
+        0);
+
+    ESP_LOGI(TAG,
+             "MQTT BACKEND RESPONSE topic=%s msg_id=%d payload=%s",
+             statusTopic_.c_str(),
+             msgId,
+             json);
+
     cJSON_free(json);
 
     return msgId >= 0 ? ESP_OK : ESP_FAIL;
@@ -136,8 +177,8 @@ void MqttManager::handleEvent(esp_mqtt_event_handle_t event)
         {
             xEventGroupSetBits(eventGroup_, MQTT_CONNECTED_BIT);
         }
-        ESP_LOGI(TAG, "MQTT connected, subscribing to %s", config_.commandTopic);
-        esp_mqtt_client_subscribe(client_, config_.commandTopic, config_.qos);
+        ESP_LOGI(TAG, "MQTT connected, subscribing to %s", commandTopic_.c_str());
+        esp_mqtt_client_subscribe(client_, commandTopic_.c_str(), config_.qos);
         publishReport(CabinetReport{CabinetReportType::BOOT, "", "", true, "mqtt_connected", "", ""});
         if (connectedHandler_)
         {
@@ -228,6 +269,8 @@ const char *MqttManager::reportTypeToString(CabinetReportType type) const
         return "COMMAND_RECEIVED";
     case CabinetReportType::DOOR_OPEN_SENT:
         return "DOOR_OPEN_SENT";
+    case CabinetReportType::DOOR_STATE_CHANGED:
+        return "DOOR_STATE_CHANGED";
     case CabinetReportType::UART_RESPONSE:
         return "UART_RESPONSE";
     case CabinetReportType::ERROR:
