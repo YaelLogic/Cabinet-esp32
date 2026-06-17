@@ -95,15 +95,10 @@ esp_err_t MqttManager::publishReport(const CabinetReport &report)
     bool shouldPublishToBackend = false;
     std::string activity;
 
-    if (report.type == CabinetReportType::DOOR_OPEN_SENT && report.success)
-    {
-        shouldPublishToBackend = true;
-        activity = "open";
-    }
-    else if (report.type == CabinetReportType::DOOR_STATE_CHANGED &&
-             !report.activity.empty() &&
-             !report.activityId.empty() &&
-             !report.doorId.empty())
+    if (report.type == CabinetReportType::DOOR_STATE_CHANGED &&
+        !report.activity.empty() &&
+        !report.activityId.empty() &&
+        !report.doorId.empty())
     {
         shouldPublishToBackend = true;
         activity = report.activity;

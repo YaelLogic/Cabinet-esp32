@@ -12,6 +12,7 @@
 class MqttManager
 {
 public:
+
     explicit MqttManager(const MqttConfig &config);
 
     void setDoorCommandHandler(std::function<void(const DoorCommand &)> handler);

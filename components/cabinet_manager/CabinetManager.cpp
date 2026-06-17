@@ -2,6 +2,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
 #include <cstdio>
 
 static const char *TAG = "CABINET_MANAGER";
@@ -155,6 +156,69 @@ void CabinetManager::handleDoorCommand(const DoorCommand &command)
         state_ = CabinetState::READY;
         return;
     }
+
+    uint8_t doorIndex = address.shelfUnit;
+
+    if (doorIndex >= lastDoorStates_.size())
+    {
+        report(CabinetReport{
+            CabinetReportType::ERROR,
+            command.doorId,
+            command.activityId,
+            false,
+            "invalid_door_index",
+            "",
+            ""});
+
+        state_ = CabinetState::READY;
+        return;
+    }
+
+    if (lastDoorStates_[doorIndex] == DoorState::UNKNOWN)
+    {
+        report(CabinetReport{
+            CabinetReportType::ERROR,
+            command.doorId,
+            command.activityId,
+            false,
+            "door_state_unknown",
+            "",
+            ""});
+
+        state_ = CabinetState::READY;
+        return;
+    }
+
+    if (lastDoorStates_[doorIndex] == DoorState::OPEN)
+    {
+        report(CabinetReport{
+            CabinetReportType::ERROR,
+            command.doorId,
+            command.activityId,
+            false,
+            "door_already_open",
+            "",
+            ""});
+
+        state_ = CabinetState::READY;
+        return;
+    }
+
+    if (pendingOpen_[doorIndex].active)
+    {
+        report(CabinetReport{
+            CabinetReportType::ERROR,
+            command.doorId,
+            command.activityId,
+            false,
+            "door_open_already_pending",
+            "",
+            ""});
+
+        state_ = CabinetState::READY;
+        return;
+    }
+
     std::string frame1 = protocol_.buildOutputPulse(address.managementUnit,
                                                     address.shelfUnit,
                                                     0x01,
@@ -187,6 +251,14 @@ void CabinetManager::handleDoorCommand(const DoorCommand &command)
     esp_err_t err2 = sendAndRead(frame2, &response2, false);
 
     bool ok = (err1 == ESP_OK && err2 == ESP_OK);
+
+    if (ok)
+    {
+        pendingOpen_[doorIndex].active = true;
+        pendingOpen_[doorIndex].doorId = command.doorId;
+        pendingOpen_[doorIndex].activityId = command.activityId;
+        pendingOpen_[doorIndex].startedAtUs = esp_timer_get_time();
+    }
 
     report(CabinetReport{
         ok ? CabinetReportType::DOOR_OPEN_SENT : CabinetReportType::ERROR,
@@ -358,6 +430,7 @@ void CabinetManager::sensorMonitorLoop()
         if (state_ == CabinetState::READY)
         {
             pollShelfInputs();
+            checkPendingOpenTimeouts();
         }
 
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -418,9 +491,10 @@ void CabinetManager::handleInputValue(uint8_t shelfUnit, uint8_t value)
         return;
     }
 
+    DoorState previousState = lastDoorStates_[doorIndex];
     DoorState newState = (value == 0x01) ? DoorState::CLOSED : DoorState::OPEN;
 
-    if (lastDoorStates_[doorIndex] == newState)
+    if (previousState == newState)
     {
         return;
     }
@@ -430,32 +504,55 @@ void CabinetManager::handleInputValue(uint8_t shelfUnit, uint8_t value)
     const std::string &doorId = doors_[doorIndex].doorId;
 
     ESP_LOGI(TAG,
-             "Door state changed: %s -> %s value=%02X",
+             "Door state changed: %s %s -> %s value=%02X",
              doorId.c_str(),
+             doorStateToString(previousState),
              doorStateToString(newState),
              value);
 
-    report(CabinetReport{
-        CabinetReportType::DOOR_STATE_CHANGED,
-        doorId,
-        "",
-        true,
-        "door_state_changed",
-        "",
-        "",
-        -1,
-        newState,
-        newState == DoorState::OPEN ? "open" :
-        newState == DoorState::CLOSED ? "close" : ""});
-}
+    if (previousState == DoorState::UNKNOWN)
+    {
+        return;
+    }
 
-DoorState CabinetManager::decodeDoorState(uint8_t value, uint8_t bitIndex) const
-{
-    bool bitIsOne = (value & (1 << bitIndex)) != 0;
+    if (newState == DoorState::OPEN)
+    {
+        if (pendingOpen_[doorIndex].active)
+        {
+            report(CabinetReport{
+                CabinetReportType::DOOR_STATE_CHANGED,
+                doorId,
+                pendingOpen_[doorIndex].activityId,
+                true,
+                "door_open_confirmed_by_sensor",
+                "",
+                "",
+                -1,
+                newState,
+                "open"});
 
-    // זמני עד בדיקת חומרה:
-    // אם נראה שזה הפוך — נהפוך כאן בלבד.
-    return bitIsOne ? DoorState::CLOSED : DoorState::OPEN;
+            pendingOpen_[doorIndex] = PendingOpenActivity{};
+        }
+
+        return;
+    }
+
+    if (newState == DoorState::CLOSED)
+    {
+        pendingOpen_[doorIndex] = PendingOpenActivity{};
+
+        report(CabinetReport{
+            CabinetReportType::DOOR_STATE_CHANGED,
+            doorId,
+            "0",
+            true,
+            "door_close_detected",
+            "",
+            "",
+            -1,
+            newState,
+            "close"});
+    }
 }
 
 const char *CabinetManager::doorStateToString(DoorState state) const
@@ -468,5 +565,34 @@ const char *CabinetManager::doorStateToString(DoorState state) const
         return "CLOSED";
     default:
         return "UNKNOWN";
+    }
+}
+
+void CabinetManager::checkPendingOpenTimeouts()
+{
+    int64_t now = esp_timer_get_time();
+
+    for (size_t i = 0; i < pendingOpen_.size(); ++i)
+    {
+        if (!pendingOpen_[i].active)
+        {
+            continue;
+        }
+
+        if (now - pendingOpen_[i].startedAtUs < OPEN_CONFIRM_TIMEOUT_US)
+        {
+            continue;
+        }
+
+        report(CabinetReport{
+            CabinetReportType::ERROR,
+            pendingOpen_[i].doorId,
+            pendingOpen_[i].activityId,
+            false,
+            "door_open_confirmation_timeout",
+            "",
+            ""});
+
+        pendingOpen_[i] = PendingOpenActivity{};
     }
 }
